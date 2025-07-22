@@ -1,0 +1,6 @@
+name = "balance-gem"
+main = "worker.js"
+compatibility_date = "2024-07-22"
+
+[[pages_build_output_config]]
+type = "workers"
