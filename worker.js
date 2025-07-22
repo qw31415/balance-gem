@@ -1,73 +1,67 @@
 export default {
-  async fetch(request, env, ctx) {
-    // 定义可复用的、更规范的CORS响应头
+  async fetch(request, env) {
+    // 1. 定义CORS响应头，确保跨域请求顺畅
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', // 明确允许的方法
-      'Access-Control-Allow-Headers': 'Content-Type, x-api-key', // 明确允许客户端发送的请求头
-      'Access-Control-Max-Age': '86400', // 允许客户端缓存预检请求结果一天，提高性能
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, x-api-key', // 保留 x-api-key 以便未来可能的扩展
     };
 
-    // 优先处理预检请求 (OPTIONS)，这是解决405问题的关键
+    // 2. 优先处理预检请求 (OPTIONS)
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204, // 使用 204 No Content，这是预检请求的标准响应
-        headers: corsHeaders,
-      });
+      return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    // 处理浏览器直接访问或健康检查 (GET)
+    // 3. 处理浏览器直接访问 (GET)，返回一个清晰的状态页面
     if (request.method === 'GET') {
-      return new Response('Miko is on duty! The balance-gem worker is running correctly. Ready for POST requests.', {
+      return new Response('Miko is on duty! The All-in-One Gemini Balance Worker is running perfectly.', {
         status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'text/plain' },
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
       });
     }
 
-    // 只处理核心的API调用 (POST)
+    // 4. --- 核心逻辑：处理API转发 (POST) ---
     if (request.method === 'POST') {
+      // 从环境变量中读取您所有的 Gemini API 密钥
+      const apiKeys = (env.GEMINI_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+
+      if (apiKeys.length === 0) {
+        return new Response('GEMINI_API_KEYS environment variable is not set or empty.', {
+          status: 500,
+          headers: corsHeaders,
+        });
+      }
+
+      // 核心中的核心：随机选择一个密钥进行负载均衡，这是最健壮的方式
+      const selectedApiKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
+
+      // 目标API的URL
+      const googleApiUrl = 'https://generativelanguage.googleapis.com';
       const requestUrl = new URL(request.url);
-      const clientKey = request.headers.get('x-api-key');
+      const targetUrl = new URL(googleApiUrl + requestUrl.pathname + requestUrl.search);
 
-      // 根据API密钥决定上游目标
-      const upstreamUrl = (clientKey === env.LOCAL_API_KEY && env.LOCAL_UPSTREAM_URL)
-        ? env.LOCAL_UPSTREAM_URL
-        : 'https://generativelanguage.googleapis.com';
+      // 创建一个新的请求，并将选中的密钥加入查询参数
+      targetUrl.searchParams.set('key', selectedApiKey);
 
-      const newRequestUrl = new URL(upstreamUrl + requestUrl.pathname + requestUrl.search);
-
-      // 创建一个全新的请求对象，避免头部信息污染
-      const newRequest = new Request(newRequestUrl, {
+      // 复制原始请求的 body 和 method
+      const newRequest = new Request(targetUrl, {
         method: request.method,
-        headers: request.headers,
+        headers: { 'Content-Type': 'application/json' }, // Google API 需要这个头
         body: request.body,
         redirect: 'follow',
       });
 
-      // 清理Cloudflare特定的请求头
-      newRequest.headers.delete('cf-connecting-ip');
-      newRequest.headers.delete('cf-worker');
+      // 发起请求并流式返回响应
+      const response = await fetch(newRequest);
+      const newResponse = new Response(response.body, response);
 
-      try {
-        const response = await fetch(newRequest);
-        const newResponse = new Response(response.body, response);
-        // 为最终响应应用CORS头
-        Object.keys(corsHeaders).forEach(key => newResponse.headers.set(key, corsHeaders[key]));
-        return newResponse;
-      } catch (error) {
-        // 如果上游（隧道）抓取失败，返回标准的502错误
-        return new Response(`Error fetching from upstream: ${error.message}`,
-         {
-          status: 502,
-          headers: { ...corsHeaders, 'Content-Type': 'text/plain' },
-        });
-      }
+      // 为最终响应加上CORS头
+      Object.keys(corsHeaders).forEach(key => newResponse.headers.set(key, corsHeaders[key]));
+
+      return newResponse;
     }
 
-    // 如果是其他任何方法 (PUT, DELETE等)，则明确返回405
-    return new Response(`Method ${request.method} not allowed.`, {
-      status: 405,
-      headers: corsHeaders,
-    });
+    // 5. 拒绝所有其他方法
+    return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
   },
 };
